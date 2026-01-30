@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>節分：豆まきと逃げる鬼</title>
+  <style>
+    :root{
+      --panel-bg: rgba(255,255,255,.92);
+      --panel-border: rgba(0,0,0,.12);
+      --shadow: 0 8px 32px rgba(0,0,0,.18);
+      --accent: #eab308;
+    }
+    html, body { height: 100%; margin: 0; }
+    body { background:#f6f6f6; overflow:hidden; touch-action: none; font-family: sans-serif; }
+    canvas { display:block; width:100%; height:100%; }
+
+    .panel{
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      z-index: 10;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 12px 14px;
+      width: 280px;
+      max-width: calc(100vw - 48px);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      user-select: none;
+      transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
+      transform-origin: top left;
+    }
+    .panel.hidden {
+      transform: scale(0.9) translateY(-20px);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .panel h1{
+      font-size: 15px;
+      margin: 0 0 10px 0;
+      font-weight: 800;
+      color: #333;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel h1 span {
+      font-size: 11px;
+      font-weight: 400;
+      background: #eee;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .row{ display:flex; gap:10px; align-items:center; margin: 8px 0; }
+    .row label{ font-size: 12px; width: 60px; font-weight: 600; color: #555; }
+    .row input[type="range"]{ flex: 1; cursor: pointer; }
+    
+    .btns{ display:flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    button{
+      border: 1px solid var(--panel-border);
+      background: white;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #444;
+      cursor: pointer;
+      flex: 1;
+      white-space: nowrap;
+      transition: background 0.1s, transform 0.1s;
+    }
+    button:active{ transform: translateY(1px); background: #f0f0f0; }
+    .primary{ background: #111; color: #fff; border-color: #111; }
+    .primary:active{ background: #333; }
+    
+    .hint{
+      font-size: 11px;
+      color: #666;
+      margin-top: 12px;
+      line-height: 1.5;
+      border-top: 1px solid rgba(0,0,0,0.1);
+      padding-top: 8px;
+    }
+
+    /* Floating Toggle Button */
+    .toggle-btn {
+      position: fixed;
+      right: 16px;
+      top: 16px;
+      width: 44px;
+      height: 44px;
+      background: white;
+      border-radius: 50%;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 20;
+      border: 1px solid rgba(0,0,0,0.1);
+      font-size: 20px;
+      transition: transform 0.2s;
+    }
+    .toggle-btn:active { transform: scale(0.95); }
+  </style>
+</head>
+<body>
+
+  <canvas id="c"></canvas>
+
+  <div class="panel" id="panel">
+    <h1>節分：豆まき <span id="fps">FPS: 60</span></h1>
+
+    <div class="row">
+      <label>鬼の数</label>
+      <input id="count" type="range" min="1" max="15" step="1" value="5">
+    </div>
+    <div class="row">
+      <label>逃げ足</label>
+      <input id="speed" type="range" min="1" max="20" step="1" value="8">
+    </div>
+    <div class="row">
+      <label>大きさ</label>
+      <input id="size" type="range" min="40" max="140" step="1" value="90">
+    </div>
+
+    <div class="btns">
+      <button class="primary" id="bg">背景変更</button>
+      <button id="clearBeans">豆を掃除</button>
+    </div>
+    <div class="btns">
+      <button id="reset">配置リセット</button>
+      <button id="fs">全画面</button>
+    </div>
+
+    <div class="hint">
+      画面をタップして豆を投げつけよう！<br>
+      豆が当たると鬼は慌てて逃げ出します。
+    </div>
+  </div>
+
+  <div class="toggle-btn" id="toggleUI">⚙️</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false }); // Optimize
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  // UI
+  const ui = {
+    panel: document.getElementById('panel'),
+    toggle: document.getElementById('toggleUI'),
+    count: document.getElementById('count'),
+    speed: document.getElementById('speed'),
+    size: document.getElementById('size'),
+    fps: document.getElementById('fps'),
+    btns: {
+      bg: document.getElementById('bg'),
+      clear: document.getElementById('clearBeans'),
+      reset: document.getElementById('reset'),
+      fs: document.getElementById('fs')
+    }
+  };
+
+  let width, height;
+  let frameCount = 0;
+  let lastTime = performance.now();
+  let bgIndex = 0;
+
+  // Game Objects
+  let onis = [];
+  let beans = [];
+
+  // Configuration
+  const CFG = {
+    friction: 0.94, // 豆の摩擦
+    beanLife: 300,  // 豆が消えるまでのフレーム
+  };
+
+  // Color Palettes
+  const PALETTES = [
+    { face: '#ef4444', shade: '#991b1b', horn: '#fef3c7', pants: '#fcd34d' }, // 赤鬼
+    { face: '#3b82f6', shade: '#1e40af', horn: '#fef3c7', pants: '#fbbf24' }, // 青鬼
+    { face: '#22c55e', shade: '#166534', horn: '#fef3c7', pants: '#fbbf24' }, // 緑鬼
+    { face: '#a855f7', shade: '#6b21a8', horn: '#fef3c7', pants: '#fbbf24' }, // 紫鬼
+  ];
+
+  // --- Resize ---
+  function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    ctx.scale(dpr, dpr);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // --- Utils ---
+  const rand = (min, max) => Math.random() * (max - min) + min;
+
+  // --- Classes ---
+
+  class Bean {
+    constructor(x, y) {
+      this.x = x;
+      this.y = y;
+      const angle = rand(0, Math.PI * 2);
+      const speed = rand(5, 15);
+      this.vx = Math.cos(angle) * speed;
+      this.vy = Math.sin(angle) * speed;
+      this.r = rand(3, 5); // radius
+      this.angle = rand(0, Math.PI);
+      this.vAngle = rand(-0.2, 0.2);
+      this.life = CFG.beanLife;
+      this.bounced = false;
+    }
+
+    update() {
+      this.x += this.vx;
+      this.y += this.vy;
+      this.vx *= CFG.friction;
+      this.vy *= CFG.friction;
+      this.angle += this.vAngle;
+      this.life--;
+      
+      // Stop moving when slow
+      if (Math.abs(this.vx) < 0.1 && Math.abs(this.vy) < 0.1) {
+        this.vx = 0; this.vy = 0; this.vAngle = 0;
+      }
+    }
+
+    draw(ctx) {
+      if (this.life <= 0) return;
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.angle);
+      
+      // Bean shape
+      ctx.fillStyle = '#fce7f3'; // skin shadow
+      ctx.fillStyle = '#eab308'; // bean color
+      ctx.beginPath();
+      ctx.ellipse(0, 0, this.r * 1.4, this.r, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.beginPath();
+      ctx.ellipse(-this.r*0.3, -this.r*0.3, this.r*0.4, this.r*0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Simple line
+      ctx.strokeStyle = '#a16207';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-this.r*0.5, 0);
+      ctx.lineTo(this.r*0.5, 0);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+  }
+
+  class Oni {
+    constructor(id) {
+      this.id = id;
+      this.reset();
+    }
+
+    reset() {
+      const sizeVal = parseInt(ui.size.value, 10);
+      this.s = sizeVal * rand(0.9, 1.1); // size
+      this.x = rand(this.s, width - this.s);
+      this.y = rand(this.s, height - this.s);
+      this.palette = PALETTES[Math.floor(rand(0, PALETTES.length))];
+      
+      const angle = rand(0, Math.PI * 2);
+      this.vx = Math.cos(angle) * 0.5;
+      this.vy = Math.sin(angle) * 0.5;
+      
+      this.time = rand(0, 1000);
+      this.panic = 0; // 0 to 1
+    }
+
+    update() {
+      this.time += 0.05;
+      
+      // Movement logic
+      let baseSpeed = parseInt(ui.speed.value, 10) / 10; // 0.1 to 2.0
+      
+      if (this.panic > 0) {
+        this.panic -= 0.01;
+        baseSpeed *= 3.5; // Run fast when panicked
+      }
+
+      // Wander
+      const noise = Math.sin(this.time) * 0.5;
+      this.vx += Math.cos(this.time * 0.5) * 0.02;
+      this.vy += Math.sin(this.time * 0.5) * 0.02;
+
+      // Normalize speed
+      const speed = Math.hypot(this.vx, this.vy);
+      const targetSpeed = baseSpeed * (1 + noise * 0.2);
+      if (speed > 0.001) {
+        this.vx = (this.vx / speed) * targetSpeed;
+        this.vy = (this.vy / speed) * targetSpeed;
+      }
+
+      this.x += this.vx;
+      this.y += this.vy;
+
+      // Bounce walls
+      const r = this.s * 0.45;
+      if (this.x < r) { this.x = r; this.vx *= -1; }
+      if (this.x > width - r) { this.x = width - r; this.vx *= -1; }
+      if (this.y < r) { this.y = r; this.vy *= -1; }
+      if (this.y > height - r) { this.y = height - r; this.vy *= -1; }
+    }
+
+    checkHit(bean) {
+      if (bean.life <= 0) return false;
+      const dx = this.x - bean.x;
+      const dy = this.y - bean.y;
+      const dist = Math.hypot(dx, dy);
+      const hitRadius = this.s * 0.45;
+
+      if (dist < hitRadius) {
+        // Hit!
+        this.panic = 1.0;
+        
+        // Push oni away slightly
+        this.vx += (dx / dist) * 2;
+        this.vy += (dy / dist) * 2;
+
+        // Bounce bean
+        bean.vx = -bean.vx * 0.6 + (this.vx * 0.5);
+        bean.vy = -bean.vy * 0.6 + (this.vy * 0.5);
+        bean.life = Math.min(bean.life, 50); // Decay faster after hit
+        return true;
+      }
+      return false;
+    }
+
+    draw(ctx) {
+      const { x, y, s } = this;
+      const p = this.palette;
+      const wobble = Math.sin(this.time * 2) * 0.05 * (1 + this.panic);
+      
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(wobble + this.vx * 0.05);
+
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.beginPath();
+      ctx.ellipse(0, s*0.4, s*0.35, s*0.1, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // Body/Face
+      ctx.fillStyle = p.face;
+      ctx.beginPath();
+      ctx.arc(0, 0, s*0.35, 0, Math.PI*2);
+      ctx.fill();
+
+      // Hair (Afro style)
+      ctx.fillStyle = '#1f2937';
+      ctx.beginPath();
+      ctx.arc(0, -s*0.25, s*0.18, 0, Math.PI*2); // Top
+      ctx.arc(-s*0.2, -s*0.15, s*0.12, 0, Math.PI*2); // Left
+      ctx.arc(s*0.2, -s*0.15, s*0.12, 0, Math.PI*2); // Right
+      ctx.fill();
+
+      // Horns
+      ctx.fillStyle = p.horn;
+      this.drawHorn(ctx, -s*0.15, -s*0.25, s*0.08, -0.3);
+      this.drawHorn(ctx, s*0.15, -s*0.25, s*0.08, 0.3);
+
+      // Eyes
+      const eyeY = -s*0.05;
+      const eyeX = s*0.12;
+      const eyeSize = s * (this.panic > 0 ? 0.09 : 0.07); // Eyes pop when hit
+      
+      // Whites
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(-eyeX, eyeY, eyeSize, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(eyeX, eyeY, eyeSize, 0, Math.PI*2); ctx.fill();
+
+      // Pupils (look at velocity or random)
+      ctx.fillStyle = '#000';
+      const lookX = this.vx * 2;
+      const lookY = this.vy * 2;
+      ctx.beginPath(); ctx.arc(-eyeX + lookX, eyeY + lookY, eyeSize*0.4, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(eyeX + lookX, eyeY + lookY, eyeSize*0.4, 0, Math.PI*2); ctx.fill();
+
+      // Eyebrows
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = s * 0.03;
+      ctx.lineCap = 'round';
+      const browY = eyeY - s*0.08;
+      const angry = this.panic > 0 ? -0.1 : 0.1; // Reverse eyebrows when panicked (sad/shocked)
+      
+      ctx.beginPath(); 
+      ctx.moveTo(-eyeX - s*0.05, browY - s*angry); 
+      ctx.lineTo(-eyeX + s*0.05, browY + s*angry); 
+      ctx.stroke();
+
+      ctx.beginPath(); 
+      ctx.moveTo(eyeX - s*0.05, browY + s*angry); 
+      ctx.lineTo(eyeX + s*0.05, browY - s*angry); 
+      ctx.stroke();
+
+      // Mouth
+      ctx.fillStyle = '#440000';
+      ctx.beginPath();
+      if (this.panic > 0) {
+        // Shocked mouth (O shape)
+        ctx.ellipse(0, s*0.15, s*0.06, s*0.08, 0, 0, Math.PI*2);
+      } else {
+        // Grin
+        ctx.arc(0, s*0.12, s*0.1, 0, Math.PI, false);
+      }
+      ctx.fill();
+
+      // Fangs
+      if (this.panic <= 0) {
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(-s*0.07, s*0.12); ctx.lineTo(-s*0.04, s*0.18); ctx.lineTo(-s*0.01, s*0.12);
+        ctx.moveTo(s*0.01, s*0.12); ctx.lineTo(s*0.04, s*0.18); ctx.lineTo(s*0.07, s*0.12);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    drawHorn(ctx, x, y, h, rot) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.beginPath();
+      ctx.moveTo(-h*0.4, 0);
+      ctx.lineTo(0, -h*1.5);
+      ctx.lineTo(h*0.4, 0);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // --- Main Loop ---
+
+  function spawnOnis() {
+    const count = parseInt(ui.count.value, 10);
+    // Reuse existing if possible to keep positions
+    if (onis.length > count) {
+      onis.length = count;
+    } else {
+      while (onis.length < count) {
+        onis.push(new Oni(onis.length));
+      }
+    }
+  }
+
+  function spawnBeans(x, y) {
+    const amount = 8;
+    for (let i = 0; i < amount; i++) {
+      beans.push(new Bean(x, y));
+    }
+    // Limit beans
+    if (beans.length > 300) {
+      beans.splice(0, beans.length - 300);
+    }
+  }
+
+  function drawBg() {
+    if (bgIndex === 0) {
+      // Washi (Paper) style
+      ctx.fillStyle = '#f8f7f2';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (bgIndex === 1) {
+      // Night
+      ctx.fillStyle = '#1e1b4b';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#fff';
+      // Stars are static in this simple implementation, or redraw
+    } else {
+      // Tatamiish
+      ctx.fillStyle = '#e8dec3';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  function loop() {
+    const now = performance.now();
+    // FPS Calc
+    if (frameCount++ % 30 === 0) {
+      const fps = Math.round(1000 / (now - lastTime));
+      ui.fps.textContent = fps + ' FPS';
+    }
+    lastTime = now;
+
+    drawBg();
+
+    // Draw & Update Beans
+    // Filter dead beans
+    for (let i = beans.length - 1; i >= 0; i--) {
+      const b = beans[i];
+      b.update();
+      if (b.life <= 0) {
+        beans.splice(i, 1);
+        continue;
+      }
+      b.draw(ctx);
+    }
+
+    // Draw & Update Onis
+    // Sort by Y for depth
+    onis.sort((a, b) => a.y - b.y);
+    
+    onis.forEach(oni => {
+      // Check collisions with all moving beans
+      for (const b of beans) {
+        // Optimization: only check fast moving beans or close ones
+        if (Math.abs(b.x - oni.x) < oni.s && Math.abs(b.y - oni.y) < oni.s) {
+           oni.checkHit(b);
+        }
+      }
+      oni.update();
+      oni.draw(ctx);
+    });
+
+    requestAnimationFrame(loop);
+  }
+
+  // --- Input ---
+  
+  function handleInput(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const isTouch = e.type.startsWith('touch');
+    const clientX = isTouch ? e.touches[0].clientX : e.clientX;
+    const clientY = isTouch ? e.touches[0].clientY : e.clientY;
+    
+    // Adjust for scaling
+    // Since canvas is full window, client coords usually map directly relative to window
+    // But let's be safe if margin/padding exists
+    const x = clientX; 
+    const y = clientY; 
+
+    spawnBeans(x, y);
+  }
+
+  canvas.addEventListener('mousedown', handleInput);
+  canvas.addEventListener('touchstart', handleInput, { passive: false });
+
+  // --- UI Events ---
+  
+  ui.count.addEventListener('input', spawnOnis);
+  
+  ui.size.addEventListener('input', () => {
+    // Resize existing onis relative to current scale? 
+    // Just force reset size property next update
+    const newSize = parseInt(ui.size.value, 10);
+    onis.forEach(o => o.s = newSize * rand(0.9, 1.1));
+  });
+
+  ui.btns.bg.addEventListener('click', () => {
+    bgIndex = (bgIndex + 1) % 3;
+  });
+
+  ui.btns.clear.addEventListener('click', () => {
+    beans = [];
+  });
+
+  ui.btns.reset.addEventListener('click', () => {
+    beans = [];
+    onis.forEach(o => o.reset());
+  });
+
+  ui.btns.fs.addEventListener('click', async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (e) {
+      console.log('Fullscreen disallowed in this environment', e);
+    }
+  });
+
+  ui.toggle.addEventListener('click', () => {
+    ui.panel.classList.toggle('hidden');
+  });
+
+  // Handle Fullscreen Change to hide/show panel
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) {
+      ui.panel.classList.add('hidden');
+    } else {
+      ui.panel.classList.remove('hidden');
+    }
+  });
+  
+  // Also try webkit prefix for iOS just in case
+  document.addEventListener('webkitfullscreenchange', () => {
+     if (document.webkitFullscreenElement) {
+      ui.panel.classList.add('hidden');
+    } else {
+      ui.panel.classList.remove('hidden');
+    }
+  });
+
+  // Init
+  spawnOnis();
+  loop();
+
+})();
+</script>
+</body>
+</html>

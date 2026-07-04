@@ -170,6 +170,7 @@
   let width, height;
   let frameCount = 0;
   let lastTime = performance.now();
+  let lastUpdateTime = 0; // 120Hz iPad対策
   let bgIndex = 0;
 
   // Game Objects
@@ -496,6 +497,12 @@
 
   function loop() {
     const now = performance.now();
+    // 更新を60fps相当に間引く（120Hz端末で豆・鬼が2倍速になるのを防ぐ）
+    if (now - lastUpdateTime < 15) {
+      requestAnimationFrame(loop);
+      return;
+    }
+    lastUpdateTime = now;
     // FPS Calc
     if (frameCount++ % 30 === 0) {
       const fps = Math.round(1000 / (now - lastTime));
